@@ -375,7 +375,16 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
   // lstat rejects symlinks; uid check restricts to running user's dirs.
   // fd-pin: open each directory before validation completes so /proc/self/fd/N
   // pins the inode through any post-check path rename.
-  for (const p of (additionalMounts || [])) {
+  //
+  // additionalMounts format: asar passes an object { mountId: { path, mode } }
+  // where path is relative-to-root (e.g. "home/user/dir"). Legacy array format
+  // (absolute strings) is also supported for test compatibility.
+  const _mountEntries = Array.isArray(additionalMounts)
+    ? additionalMounts.filter(p => typeof p === 'string' && p)
+    : Object.values(additionalMounts || {})
+        .filter(s => s && typeof s.path === 'string')
+        .map(s => '/' + s.path);
+  for (const p of _mountEntries) {
     if (typeof p !== 'string' || !p) continue;
     if (!isPathSafe(p)) continue;
     try {

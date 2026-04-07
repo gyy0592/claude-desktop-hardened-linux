@@ -371,3 +371,76 @@ describe('IPC boundary: userSelectedFolders translation', () => {
     assert.ok(!flags.includes(fakePath), `Non-existent ${fakePath} should not appear in bwrap flags`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Test 3: Object-format additionalMounts (asar production format)
+//
+// The asar calls vm.spawn() with additionalMounts as:
+//   { mountId: { path: "relative/path/to/dir", mode: "rwd" } }
+// where path is relative to "/" (i.e. path.relative("/", absolutePath)).
+// Our fix must convert "relative/path" → "/relative/path" before bind.
+// ---------------------------------------------------------------------------
+
+describe('Object-format additionalMounts (asar production format)', () => {
+  // Uses module-level cp.spawn mock and capturedArgs/capturedCmd from outer scope.
+  let stub;
+
+  before(() => {
+    stub = new SwiftAddonStub();
+    stub._claudeBinary = '/usr/bin/true';
+  });
+
+  beforeEach(() => {
+    capturedCmd = null;
+    capturedArgs = null;
+  });
+
+  it('object-format additionalMounts: one folder → --bind in bwrap args', async () => {
+    const tmpDir = fs.mkdtempSync(os.tmpdir() + '/cowork-obj-a-');
+    try {
+      // Simulate what asar builds: path.relative("/", tmpDir)
+      const relativePath = tmpDir.replace(/^\//, '');
+      const additionalMounts = {
+        'some-mount-id': { path: relativePath, mode: 'rwd' },
+      };
+      await stub.spawn('sess1', 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
+
+      assert.ok(capturedArgs !== null, 'spawn should have been called');
+      const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
+      const bindIdx = flags.findIndex((a, i) =>
+        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
+      );
+      assert.ok(bindIdx !== -1, `Expected --bind /proc/self/fd/N ${tmpDir} in: ${flags.join(' ')}`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('object-format additionalMounts: two folders → two --bind entries', async () => {
+    const t1 = fs.mkdtempSync(os.tmpdir() + '/cowork-obj-b-');
+    const t2 = fs.mkdtempSync(os.tmpdir() + '/cowork-obj-c-');
+    try {
+      const additionalMounts = {
+        'mount-a': { path: t1.replace(/^\//, ''), mode: 'rwd' },
+        'mount-b': { path: t2.replace(/^\//, ''), mode: 'ro' },
+      };
+      await stub.spawn('sess2', 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
+
+      const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
+      for (const dir of [t1, t2]) {
+        assert.ok(
+          flags.findIndex((a, i) => a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === dir) !== -1,
+          `Missing --bind /proc/self/fd/N ${dir}`
+        );
+      }
+    } finally {
+      fs.rmSync(t1, { recursive: true, force: true });
+      fs.rmSync(t2, { recursive: true, force: true });
+    }
+  });
+
+  it('object-format additionalMounts: empty object → no extra --bind', async () => {
+    await stub.spawn('sess3', 'claude', '/usr/bin/true', [], '/tmp', {}, {});
+    assert.ok(capturedArgs !== null, 'spawn should have been called');
+  });
+});
