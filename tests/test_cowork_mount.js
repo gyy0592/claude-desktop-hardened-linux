@@ -199,13 +199,13 @@ describe('bwrap host-folder mounting integration', () => {
       const bwrapArgs = extractBwrapArgs(capturedArgs);
       const flags = bwrapFlagsBeforeDoubleDash(bwrapArgs);
 
-      // Find the --bind index for our tmpDir
+      // Find the --bind index for our tmpDir (source is /proc/self/fd/N after fd-pin fix)
       const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && flags[i + 1] === tmpDir && flags[i + 2] === tmpDir
+        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
       );
       assert.ok(
         bindIdx !== -1,
-        `Expected --bind ${tmpDir} ${tmpDir} in bwrap flags before '--', got: ${flags.join(' ')}`
+        `Expected --bind /proc/self/fd/N ${tmpDir} in bwrap flags before '--', got: ${flags.join(' ')}`
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -226,11 +226,11 @@ describe('bwrap host-folder mounting integration', () => {
 
       for (const dir of [tmpDir1, tmpDir2]) {
         const bindIdx = flags.findIndex((a, i) =>
-          a === '--bind' && flags[i + 1] === dir && flags[i + 2] === dir
+          a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === dir
         );
         assert.ok(
           bindIdx !== -1,
-          `Expected --bind ${dir} ${dir} in bwrap flags, got: ${flags.join(' ')}`
+          `Expected --bind /proc/self/fd/N ${dir} in bwrap flags, got: ${flags.join(' ')}`
         );
       }
     } finally {
@@ -323,9 +323,9 @@ describe('IPC boundary: userSelectedFolders translation', () => {
       assert.ok(capturedArgs !== null, 'spawn should have been called');
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
       const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && flags[i + 1] === tmpDir && flags[i + 2] === tmpDir
+        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
       );
-      assert.ok(bindIdx !== -1, `Expected --bind ${tmpDir} ${tmpDir} in: ${flags.join(' ')}`);
+      assert.ok(bindIdx !== -1, `Expected --bind /proc/self/fd/N ${tmpDir} in: ${flags.join(' ')}`);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -342,8 +342,8 @@ describe('IPC boundary: userSelectedFolders translation', () => {
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
       for (const dir of [t1, t2]) {
         assert.ok(
-          flags.findIndex((a, i) => a === '--bind' && flags[i + 1] === dir && flags[i + 2] === dir) !== -1,
-          `Missing --bind ${dir}`
+          flags.findIndex((a, i) => a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === dir) !== -1,
+          `Missing --bind /proc/self/fd/N ${dir}`
         );
       }
     } finally {

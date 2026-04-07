@@ -368,31 +368,33 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
     roBindIfExists(bwrapArgs, dir);
   }
 
+  const mountFds = [];
+
   // User-granted host folders — bind into sandbox.
-  // Trust boundary: paths come from the Cowork UI (explicit user grant). Three guards:
-  //   1. isPathSafe() blocks sensitive system directories
-  //   2. lstat rejects symlinks (no symlink-swap without owning the inode)
-  //   3. UID check ensures only the running user's own directories are accepted,
-  //      closing cross-user TOCTOU: an attacker who could swap the parent directory
-  //      would need to own it, but ownership check prevents mounting their directories
+  // Trust boundary: Cowork UI grants; isPathSafe() blocks system dirs;
+  // lstat rejects symlinks; uid check restricts to running user's dirs.
+  // fd-pin: open each directory before validation completes so /proc/self/fd/N
+  // pins the inode through any post-check path rename.
   for (const p of (additionalMounts || [])) {
     if (typeof p !== 'string' || !p) continue;
     if (!isPathSafe(p)) continue;
     try {
       const stat = fs.lstatSync(p);
-      // Reject symlinks: guard against symlink-swap attacks
       if (!stat.isDirectory()) continue;
-      // Reject directories not owned by the current user
       if (stat.uid !== process.getuid()) continue;
-      bwrapArgs.push('--bind', p, p);
+      const fd = fs.openSync(p, fs.constants.O_RDONLY);
+      const childFd = 3 + mountFds.length; // fd number in child after stdio passthrough
+      mountFds.push(fd);
+      // Use /proc/self/fd/N: bwrap reads the inode via the open fd, not the path string
+      bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, p);
     } catch (_) {
-      // Path does not exist, inaccessible, or uid check unavailable — skip
+      // path inaccessible, gone, or open failed — skip
     }
   }
 
   bwrapArgs.push('--', claudeBinary, ...args);
 
-  return { command: resolveBwrap(), args: bwrapArgs, env };
+  return { command: resolveBwrap(), args: bwrapArgs, env, mountFds };
 }
 
 // ---------------------------------------------------------------------------
@@ -476,7 +478,7 @@ class SwiftAddonStub {
     let child;
 
     if (this._backend === 'bubblewrap') {
-      const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv } =
+      const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv, mountFds = [] } =
         buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts);
 
       let spawnCmd, spawnArgs;
@@ -500,8 +502,13 @@ class SwiftAddonStub {
       child = spawn(spawnCmd, spawnArgs, {
         cwd: workDir,
         env: bwrapEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe', ...mountFds],
       });
+
+      // Close our copies after spawn — child has inherited them
+      for (const fd of mountFds) {
+        try { fs.closeSync(fd); } catch (_) {}
+      }
     } else {
       // Host backend — refuse to run unsandboxed
       throw new Error(
