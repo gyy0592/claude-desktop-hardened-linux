@@ -368,9 +368,9 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
     roBindIfExists(bwrapArgs, dir);
   }
 
-  // User-granted host folders — bind into sandbox, skipping non-existent paths
+  // User-granted host folders — bind into sandbox, skipping non-existent or unsafe paths
   for (const p of (additionalMounts || [])) {
-    if (typeof p === 'string' && p && fs.existsSync(p)) {
+    if (typeof p === 'string' && p && isPathSafe(p) && fs.existsSync(p)) {
       bwrapArgs.push('--bind', p, p);
     }
   }
