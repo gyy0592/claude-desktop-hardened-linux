@@ -385,9 +385,10 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
       // Open with O_NOFOLLOW: if p was swapped to a symlink after lstatSync,
       // openSync throws ELOOP — caught below, path is skipped safely
       const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-      // Re-validate via fd (no path resolution — operates on the pinned inode)
+      // Re-validate via fd and verify it is the SAME inode lstatSync approved
       const fdStat = fs.fstatSync(fd);
-      if (!fdStat.isDirectory() || fdStat.uid !== process.getuid()) {
+      if (!fdStat.isDirectory() || fdStat.uid !== process.getuid() ||
+          fdStat.ino !== stat.ino || fdStat.dev !== stat.dev) {
         fs.closeSync(fd);
         continue;
       }
