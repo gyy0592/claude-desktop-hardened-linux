@@ -285,7 +285,7 @@ function roBindIfExists(bwrapArgs, hostPath, destPath) {
  * explicitly listed. This prevents the agent from reading browser data,
  * password managers, other users' files, or anything outside its workspace.
  */
-function buildBwrapCommand(claudeBinary, args, workDir, env) {
+function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
   const home = os.homedir();
   const bwrapArgs = [
     '--die-with-parent',
@@ -366,6 +366,13 @@ function buildBwrapCommand(claudeBinary, args, workDir, env) {
   ];
   for (const dir of nodeReadonly) {
     roBindIfExists(bwrapArgs, dir);
+  }
+
+  // User-granted host folders — bind into sandbox, skipping non-existent paths
+  for (const p of (additionalMounts || [])) {
+    if (typeof p === 'string' && p && fs.existsSync(p)) {
+      bwrapArgs.push('--bind', p, p);
+    }
   }
 
   bwrapArgs.push('--', claudeBinary, ...args);
@@ -455,7 +462,7 @@ class SwiftAddonStub {
 
     if (this._backend === 'bubblewrap') {
       const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv } =
-        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv);
+        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts);
 
       let spawnCmd, spawnArgs;
       if (hasSystemdRun()) {
