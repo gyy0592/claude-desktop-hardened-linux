@@ -368,10 +368,19 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
     roBindIfExists(bwrapArgs, dir);
   }
 
-  // User-granted host folders — bind into sandbox, skipping non-existent or unsafe paths
+  // User-granted host folders — bind into sandbox, skipping non-existent, unsafe, or
+  // symlink-aliased sensitive paths (bwrap follows symlinks on --bind)
   for (const p of (additionalMounts || [])) {
-    if (typeof p === 'string' && p && isPathSafe(p) && fs.existsSync(p)) {
-      bwrapArgs.push('--bind', p, p);
+    if (typeof p !== 'string' || !p) continue;
+    if (!isPathSafe(p)) continue;
+    if (!fs.existsSync(p)) continue;
+    try {
+      const resolved = fs.realpathSync(p);
+      if (isPathSafe(resolved)) {
+        bwrapArgs.push('--bind', p, p);
+      }
+    } catch (_) {
+      // Path disappeared or resolution failed — skip
     }
   }
 
