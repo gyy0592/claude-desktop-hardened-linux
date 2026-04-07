@@ -382,10 +382,17 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
       const stat = fs.lstatSync(p);
       if (!stat.isDirectory()) continue;
       if (stat.uid !== process.getuid()) continue;
-      const fd = fs.openSync(p, fs.constants.O_RDONLY);
-      const childFd = 3 + mountFds.length; // fd number in child after stdio passthrough
+      // Open with O_NOFOLLOW: if p was swapped to a symlink after lstatSync,
+      // openSync throws ELOOP — caught below, path is skipped safely
+      const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      // Re-validate via fd (no path resolution — operates on the pinned inode)
+      const fdStat = fs.fstatSync(fd);
+      if (!fdStat.isDirectory() || fdStat.uid !== process.getuid()) {
+        fs.closeSync(fd);
+        continue;
+      }
+      const childFd = 3 + mountFds.length;
       mountFds.push(fd);
-      // Use /proc/self/fd/N: bwrap reads the inode via the open fd, not the path string
       bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, p);
     } catch (_) {
       // path inaccessible, gone, or open failed — skip
