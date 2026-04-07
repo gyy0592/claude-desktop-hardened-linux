@@ -368,19 +368,20 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
     roBindIfExists(bwrapArgs, dir);
   }
 
-  // User-granted host folders — bind into sandbox, skipping non-existent, unsafe, or
-  // symlink-aliased sensitive paths (bwrap follows symlinks on --bind)
+  // User-granted host folders — bind into sandbox.
+  // Trust boundary: paths come from the Cowork UI where the user explicitly granted
+  // access. isPathSafe() filters sensitive system directories. Symlinks are rejected
+  // entirely to prevent symlink-swap attacks; only real directories are accepted.
   for (const p of (additionalMounts || [])) {
     if (typeof p !== 'string' || !p) continue;
     if (!isPathSafe(p)) continue;
-    if (!fs.existsSync(p)) continue;
     try {
-      const resolved = fs.realpathSync(p);
-      if (isPathSafe(resolved)) {
-        bwrapArgs.push('--bind', resolved, resolved);
-      }
+      const stat = fs.lstatSync(p);
+      // Reject symlinks: following them at exec time risks TOCTOU bypasses
+      if (!stat.isDirectory()) continue;
+      bwrapArgs.push('--bind', p, p);
     } catch (_) {
-      // Path disappeared or resolution failed — skip
+      // Path does not exist or is not accessible — skip
     }
   }
 
