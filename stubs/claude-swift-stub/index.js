@@ -377,7 +377,7 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
     try {
       const resolved = fs.realpathSync(p);
       if (isPathSafe(resolved)) {
-        bwrapArgs.push('--bind', p, p);
+        bwrapArgs.push('--bind', resolved, resolved);
       }
     } catch (_) {
       // Path disappeared or resolution failed — skip
