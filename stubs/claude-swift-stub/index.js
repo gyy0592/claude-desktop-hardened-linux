@@ -440,6 +440,8 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, s
       }
       const childFd = 3 + mountFds.length;
       mountFds.push(fd);
+      // bwrap --bind requires the destination to exist; create it with --dir first
+      bwrapArgs.push('--dir', vmDest);
       bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, vmDest);
     } catch (_) {
       // path inaccessible, gone, or open failed — skip
