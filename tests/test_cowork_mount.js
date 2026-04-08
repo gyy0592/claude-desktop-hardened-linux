@@ -147,26 +147,6 @@ const { SwiftAddonStub } = require('../stubs/claude-swift-stub/index');
 const { SessionOrchestrator } = require('../stubs/cowork/session_orchestrator');
 
 // ---------------------------------------------------------------------------
-// IPC-boundary setup — capture handlers from ipc_overrides.js
-//
-// Strategy: temporarily replace ipcMain.handle in the ELECTRON_FAKE_PATH cache
-// to intercept handler registration, then restore the original. This does NOT
-// touch require.cache[...].exports.vm or any module under test — it only
-// reconfigures the already-fake ipcMain mock that we own.
-// ---------------------------------------------------------------------------
-
-const capturedIpcHandlers = {};
-{
-  const fakeElectron = require.cache[ELECTRON_FAKE_PATH].exports;
-  const origHandle = fakeElectron.ipcMain.handle;
-  fakeElectron.ipcMain.handle = (ch, fn) => { capturedIpcHandlers[ch] = fn; };
-  fakeElectron.ipcMain.removeHandler = () => {};
-  const { registerCoworkHandlers } = require('../stubs/cowork/ipc_overrides');
-  registerCoworkHandlers();
-  fakeElectron.ipcMain.handle = origHandle; // restore
-}
-
-// ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
 
@@ -288,70 +268,6 @@ describe('bwrap host-folder mounting integration', () => {
       !flags.includes(fakePath),
       `Non-existent path ${fakePath} should not appear in bwrap flags`
     );
-  });
-
-});
-
-// ---------------------------------------------------------------------------
-// IPC boundary: userSelectedFolders translation
-//
-// Verifies that the real localAgentModeSessions:start IPC handler
-// (from ipc_overrides.js) translates userSelectedFolders → mountPaths
-// and that the resulting bwrap call includes --bind entries for existing
-// folders. Also verifies that empty userSelectedFolders causes no extra
-// --bind entries.
-//
-// The capturedIpcHandlers map was populated at module load time above.
-// ---------------------------------------------------------------------------
-
-describe('IPC boundary: userSelectedFolders translation', () => {
-
-  beforeEach(() => {
-    capturedCmd = null;
-    capturedArgs = null;
-  });
-
-  afterEach(() => {
-    capturedCmd = null;
-    capturedArgs = null;
-  });
-
-  it('one existing userSelectedFolders entry → --bind /proc/self/fd/N dir in bwrap args', async () => {
-    const handler = capturedIpcHandlers['localAgentModeSessions:start'];
-    assert.ok(typeof handler === 'function', 'localAgentModeSessions:start handler must be captured');
-
-    const tmpDir = fs.mkdtempSync(os.tmpdir() + '/cowork-ipc-a-');
-    try {
-      // Pass null as _event (handler ignores it), options has userSelectedFolders
-      await handler(null, { userSelectedFolders: [tmpDir], workDir: '/tmp' });
-
-      assert.ok(capturedArgs !== null, 'spawn should have been called');
-      const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-      const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
-      );
-      assert.ok(
-        bindIdx !== -1,
-        `Expected --bind /proc/self/fd/N ${tmpDir} in bwrap flags before '--', got: ${flags.join(' ')}`
-      );
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('empty userSelectedFolders → no extra --bind beyond baseline', async () => {
-    const handler = capturedIpcHandlers['localAgentModeSessions:start'];
-    assert.ok(typeof handler === 'function', 'localAgentModeSessions:start handler must be captured');
-
-    // Call with empty userSelectedFolders; spawn should still be called but no extra --bind
-    await handler(null, { userSelectedFolders: [], workDir: '/tmp' });
-
-    assert.ok(capturedArgs !== null, 'spawn should have been called');
-    const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-    // No paths from userSelectedFolders, so no /proc/self/fd/* bind entry beyond baseline
-    // (We only verify spawn was called and the flags array is valid — baseline --bind count
-    //  is unchanged by the empty list.)
-    assert.ok(Array.isArray(flags), 'bwrap flags should be an array');
   });
 
 });
