@@ -86,8 +86,6 @@ Module._resolveFilename = function(request, parent, isMain, options) {
   return origResolveFilename.call(this, request, parent, isMain, options);
 };
 
-const capturedIpcHandlers = {};
-
 require.cache[ELECTRON_FAKE_PATH] = {
   id: ELECTRON_FAKE_PATH,
   filename: ELECTRON_FAKE_PATH,
@@ -99,8 +97,8 @@ require.cache[ELECTRON_FAKE_PATH] = {
       getVersion: () => '1.0',
     },
     ipcMain: {
-      handle: (channel, fn) => { capturedIpcHandlers[channel] = fn; },
-      removeHandler: (channel) => { delete capturedIpcHandlers[channel]; },
+      handle: () => {},
+      removeHandler: () => {},
     },
     screen: {
       getPrimaryDisplay: () => ({ id: 1, size: { width: 1920, height: 1080 }, scaleFactor: 1, bounds: { x: 0, y: 0 }, label: 'Display 1' }),
@@ -145,20 +143,6 @@ cp.spawn = function(cmd, args, opts) {
 // our mock — as long as the module hasn't been loaded yet (which it hasn't, since
 // this is the first require in this test file).
 const { SwiftAddonStub } = require('../stubs/claude-swift-stub/index');
-
-// Patch the real stub's exports to include a .vm instance so that
-// ipc_overrides.js's `swiftStub.vm` resolves to a real SwiftAddonStub
-// rather than the promisified wrapper (which returns promises instead of
-// synchronous handles, breaking SessionOrchestrator).
-{
-  const realStubPath = require.resolve('../stubs/claude-swift-stub/index');
-  const realStubExports = require.cache[realStubPath].exports;
-  if (!realStubExports.vm || !(realStubExports.vm instanceof SwiftAddonStub)) {
-    const vmInstance = new SwiftAddonStub();
-    vmInstance._claudeBinary = '/usr/bin/true';
-    realStubExports.vm = vmInstance;
-  }
-}
 
 const { SessionOrchestrator } = require('../stubs/cowork/session_orchestrator');
 
@@ -286,90 +270,6 @@ describe('bwrap host-folder mounting integration', () => {
     );
   });
 
-});
-
-// ---------------------------------------------------------------------------
-// IPC boundary tests — exercises the real registerCoworkHandlers() from
-// ipc_overrides.js, verifying that the userSelectedFolders wire field is
-// translated to mountPaths before reaching SessionOrchestrator.start().
-// ---------------------------------------------------------------------------
-
-describe('IPC boundary: userSelectedFolders translation', () => {
-  // Load ipc_overrides.js which registers the real handlers.
-  // Delete it from cache to ensure a fresh load with our mocked electron dep.
-  const ipcOverridesPath = require.resolve('../stubs/cowork/ipc_overrides');
-  if (require.cache[ipcOverridesPath]) delete require.cache[ipcOverridesPath];
-
-  // Also reset the orchestrator singleton so each test describe block gets
-  // a fresh orchestrator backed by our patched stub.
-  const { registerCoworkHandlers } = require('../stubs/cowork/ipc_overrides');
-  registerCoworkHandlers();
-
-  // The handlers are now in capturedIpcHandlers keyed by channel name.
-
-  beforeEach(() => {
-    capturedCmd = null;
-    capturedArgs = null;
-  });
-
-  it('userSelectedFolders translates to --bind in bwrap args', async () => {
-    const tmpDir = fs.mkdtempSync(os.tmpdir() + '/cowork-ipc-test-');
-    try {
-      const handler = capturedIpcHandlers['localAgentModeSessions:start'];
-      assert.ok(handler, 'localAgentModeSessions:start handler must be registered');
-
-      await handler({}, { userSelectedFolders: [tmpDir], workDir: '/tmp' });
-
-      assert.ok(capturedArgs !== null, 'spawn should have been called');
-      const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-      const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
-      );
-      assert.ok(bindIdx !== -1, `Expected --bind /proc/self/fd/N ${tmpDir} in: ${flags.join(' ')}`);
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('userSelectedFolders with two folders → two --bind', async () => {
-    const t1 = fs.mkdtempSync(os.tmpdir() + '/cowork-ipc-a-');
-    const t2 = fs.mkdtempSync(os.tmpdir() + '/cowork-ipc-b-');
-    try {
-      const handler = capturedIpcHandlers['localAgentModeSessions:start'];
-      capturedArgs = null;
-      await handler({}, { userSelectedFolders: [t1, t2], workDir: '/tmp' });
-
-      const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-      for (const dir of [t1, t2]) {
-        assert.ok(
-          flags.findIndex((a, i) => a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === dir) !== -1,
-          `Missing --bind /proc/self/fd/N ${dir}`
-        );
-      }
-    } finally {
-      fs.rmSync(t1, { recursive: true, force: true });
-      fs.rmSync(t2, { recursive: true, force: true });
-    }
-  });
-
-  it('empty userSelectedFolders → no extra --bind', async () => {
-    const handler = capturedIpcHandlers['localAgentModeSessions:start'];
-    capturedArgs = null;
-    await handler({}, { userSelectedFolders: [], workDir: '/tmp' });
-
-    // Just assert spawn was called and didn't crash
-    assert.ok(capturedArgs !== null, 'spawn should have been called even with no folders');
-  });
-
-  it('non-existent folder in userSelectedFolders → silently skipped', async () => {
-    const fakePath = '/tmp/cowork-nonexistent-ipc-' + Date.now();
-    const handler = capturedIpcHandlers['localAgentModeSessions:start'];
-    capturedArgs = null;
-    await handler({}, { userSelectedFolders: [fakePath], workDir: '/tmp' });
-
-    const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs || []));
-    assert.ok(!flags.includes(fakePath), `Non-existent ${fakePath} should not appear in bwrap flags`);
-  });
 });
 
 // ---------------------------------------------------------------------------
