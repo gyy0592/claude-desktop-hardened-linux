@@ -285,7 +285,7 @@ function roBindIfExists(bwrapArgs, hostPath, destPath) {
  * explicitly listed. This prevents the agent from reading browser data,
  * password managers, other users' files, or anything outside its workspace.
  */
-function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
+function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, sessionId) {
   const home = os.homedir();
   const bwrapArgs = [
     '--die-with-parent',
@@ -377,20 +377,40 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
   // pins the inode through any post-check path rename.
   //
   // additionalMounts format: asar passes an object { mountId: { path, mode } }
-  // where path is relative-to-root (e.g. "home/user/dir"). Legacy array format
-  // (absolute strings) is also supported for test compatibility.
-  const _mountEntries = Array.isArray(additionalMounts)
-    ? additionalMounts.filter(p => typeof p === 'string' && p)
-    : Object.values(additionalMounts || {})
-        .filter(s => s && typeof s.path === 'string')
-        .map(s => '/' + s.path);
-  for (const p of _mountEntries) {
+  // where path is relative-to-root (e.g. "home/user/dir"). The bind destination
+  // must be SESSION_BASE/sessions/{sessionId}/mnt/{mountId} — that is the path
+  // the asar vm layer exposes inside the sandbox as /sessions/{processName}/mnt/{mountId}.
+  // Legacy array format (absolute strings) is also supported for test compatibility,
+  // binding to the host path as destination.
+
+  const _bindPairs = []; // { hostPath, destPath }
+
+  if (Array.isArray(additionalMounts)) {
+    // Legacy / test format: array of absolute path strings, dest = host path
+    for (const p of additionalMounts) {
+      if (typeof p === 'string' && p) _bindPairs.push({ hostPath: p, destPath: p });
+    }
+  } else if (additionalMounts && typeof additionalMounts === 'object') {
+    // Production format from asar: { mountId: { path: 'home/user/dir', mode } }
+    // path is path.relative('/', absolutePath), i.e. without leading slash.
+    // Destination: SESSION_BASE/sessions/{sessionId}/mnt/{mountId}
+    for (const [mountId, spec] of Object.entries(additionalMounts)) {
+      if (!spec || typeof spec.path !== 'string') continue;
+      const hostPath = '/' + spec.path;
+      const destPath = path.join(SESSION_BASE, 'sessions', String(sessionId || ''), 'mnt', mountId);
+      _bindPairs.push({ hostPath, destPath });
+    }
+  }
+
+  for (const { hostPath: p, destPath } of _bindPairs) {
     if (typeof p !== 'string' || !p) continue;
     if (!isPathSafe(p)) continue;
     try {
       const stat = fs.lstatSync(p);
       if (!stat.isDirectory()) continue;
       if (stat.uid !== process.getuid()) continue;
+      // Ensure destination directory exists inside SESSION_BASE (already bound writable)
+      try { fs.mkdirSync(destPath, { recursive: true }); } catch (_) {}
       // Open with O_NOFOLLOW: if p was swapped to a symlink after lstatSync,
       // openSync throws ELOOP — caught below, path is skipped safely
       const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -414,7 +434,7 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
       }
       const childFd = 3 + mountFds.length;
       mountFds.push(fd);
-      bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, p);
+      bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, destPath);
     } catch (_) {
       // path inaccessible, gone, or open failed — skip
     }
@@ -507,7 +527,7 @@ class SwiftAddonStub {
 
     if (this._backend === 'bubblewrap') {
       const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv, mountFds = [] } =
-        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts);
+        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts, sessionId);
 
       let spawnCmd, spawnArgs;
       if (hasSystemdRun()) {

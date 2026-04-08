@@ -19,6 +19,7 @@ const { describe, it, before, after, beforeEach, afterEach } = require('node:tes
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
+const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
 // ---------------------------------------------------------------------------
@@ -379,7 +380,7 @@ describe('Object-format additionalMounts (asar production format)', () => {
     capturedArgs = null;
   });
 
-  it('object-format additionalMounts: one folder → --bind in bwrap args', async () => {
+  it('object-format additionalMounts: one folder → --bind dest is SESSION_BASE/sessions/{id}/mnt/{mountId}', async () => {
     const tmpDir = fs.mkdtempSync(os.tmpdir() + '/cowork-obj-a-');
     try {
       // Simulate what asar builds: path.relative("/", tmpDir)
@@ -387,34 +388,47 @@ describe('Object-format additionalMounts (asar production format)', () => {
       const additionalMounts = {
         'some-mount-id': { path: relativePath, mode: 'rwd' },
       };
-      await stub.spawn('sess1', 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
+      const sessionId = 'sess1';
+      const mountId = 'some-mount-id';
+      await stub.spawn(sessionId, 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
 
       assert.ok(capturedArgs !== null, 'spawn should have been called');
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
+      const home = os.homedir();
+      const sessionBase = process.env.XDG_CONFIG_HOME
+        ? path.join(process.env.XDG_CONFIG_HOME, 'Claude', 'local-agent-mode-sessions')
+        : path.join(home, '.config', 'Claude', 'local-agent-mode-sessions');
+      const expectedDest = path.join(sessionBase, 'sessions', sessionId, 'mnt', mountId);
       const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
+        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === expectedDest
       );
-      assert.ok(bindIdx !== -1, `Expected --bind /proc/self/fd/N ${tmpDir} in: ${flags.join(' ')}`);
+      assert.ok(bindIdx !== -1, `Expected --bind /proc/self/fd/N ${expectedDest} in: ${flags.join(' ')}`);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it('object-format additionalMounts: two folders → two --bind entries', async () => {
+  it('object-format additionalMounts: two folders → two --bind entries at correct mnt paths', async () => {
     const t1 = fs.mkdtempSync(os.tmpdir() + '/cowork-obj-b-');
     const t2 = fs.mkdtempSync(os.tmpdir() + '/cowork-obj-c-');
     try {
+      const sessionId = 'sess2';
       const additionalMounts = {
         'mount-a': { path: t1.replace(/^\//, ''), mode: 'rwd' },
         'mount-b': { path: t2.replace(/^\//, ''), mode: 'ro' },
       };
-      await stub.spawn('sess2', 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
+      await stub.spawn(sessionId, 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
 
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-      for (const dir of [t1, t2]) {
+      const home = os.homedir();
+      const sessionBase = process.env.XDG_CONFIG_HOME
+        ? path.join(process.env.XDG_CONFIG_HOME, 'Claude', 'local-agent-mode-sessions')
+        : path.join(home, '.config', 'Claude', 'local-agent-mode-sessions');
+      for (const [mountId] of [['mount-a'], ['mount-b']]) {
+        const expectedDest = path.join(sessionBase, 'sessions', sessionId, 'mnt', mountId);
         assert.ok(
-          flags.findIndex((a, i) => a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === dir) !== -1,
-          `Missing --bind /proc/self/fd/N ${dir}`
+          flags.findIndex((a, i) => a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === expectedDest) !== -1,
+          `Missing --bind /proc/self/fd/N ${expectedDest}`
         );
       }
     } finally {
