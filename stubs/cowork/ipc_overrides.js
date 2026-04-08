@@ -61,6 +61,10 @@ function registerCoworkHandlers() {
   // --- LocalAgentModeSessions ---
 
   safeHandle('localAgentModeSessions:start', async (_event, options) => {
+    if (!options) options = {};
+    if (!options.mountPaths?.length && Array.isArray(options.userSelectedFolders)) {
+      options.mountPaths = options.userSelectedFolders;
+    }
     return orch.start(options);
   });
 

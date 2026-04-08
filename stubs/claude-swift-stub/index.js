@@ -285,7 +285,7 @@ function roBindIfExists(bwrapArgs, hostPath, destPath) {
  * explicitly listed. This prevents the agent from reading browser data,
  * password managers, other users' files, or anything outside its workspace.
  */
-function buildBwrapCommand(claudeBinary, args, workDir, env) {
+function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts) {
   const home = os.homedir();
   const bwrapArgs = [
     '--die-with-parent',
@@ -368,9 +368,61 @@ function buildBwrapCommand(claudeBinary, args, workDir, env) {
     roBindIfExists(bwrapArgs, dir);
   }
 
+  const mountFds = [];
+
+  // User-granted host folders — bind into sandbox.
+  // Trust boundary: Cowork UI grants; isPathSafe() blocks system dirs;
+  // lstat rejects symlinks; uid check restricts to running user's dirs.
+  // fd-pin: open each directory before validation completes so /proc/self/fd/N
+  // pins the inode through any post-check path rename.
+  //
+  // additionalMounts format: asar passes an object { mountId: { path, mode } }
+  // where path is relative-to-root (e.g. "home/user/dir"). Legacy array format
+  // (absolute strings) is also supported for test compatibility.
+  const _mountEntries = Array.isArray(additionalMounts)
+    ? additionalMounts.filter(p => typeof p === 'string' && p)
+    : Object.values(additionalMounts || {})
+        .filter(s => s && typeof s.path === 'string')
+        .map(s => '/' + s.path);
+  for (const p of _mountEntries) {
+    if (typeof p !== 'string' || !p) continue;
+    if (!isPathSafe(p)) continue;
+    try {
+      const stat = fs.lstatSync(p);
+      if (!stat.isDirectory()) continue;
+      if (stat.uid !== process.getuid()) continue;
+      // Open with O_NOFOLLOW: if p was swapped to a symlink after lstatSync,
+      // openSync throws ELOOP — caught below, path is skipped safely
+      const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      // Re-check isPathSafe on the real path to catch intermediate symlinks
+      try {
+        const realPath = fs.readlinkSync(`/proc/self/fd/${fd}`);
+        if (!isPathSafe(realPath)) {
+          fs.closeSync(fd);
+          continue;
+        }
+      } catch (_) {
+        fs.closeSync(fd);
+        continue;
+      }
+      // Re-validate via fd and verify it is the SAME inode lstatSync approved
+      const fdStat = fs.fstatSync(fd);
+      if (!fdStat.isDirectory() || fdStat.uid !== process.getuid() ||
+          fdStat.ino !== stat.ino || fdStat.dev !== stat.dev) {
+        fs.closeSync(fd);
+        continue;
+      }
+      const childFd = 3 + mountFds.length;
+      mountFds.push(fd);
+      bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, p);
+    } catch (_) {
+      // path inaccessible, gone, or open failed — skip
+    }
+  }
+
   bwrapArgs.push('--', claudeBinary, ...args);
 
-  return { command: resolveBwrap(), args: bwrapArgs, env };
+  return { command: resolveBwrap(), args: bwrapArgs, env, mountFds };
 }
 
 // ---------------------------------------------------------------------------
@@ -454,8 +506,8 @@ class SwiftAddonStub {
     let child;
 
     if (this._backend === 'bubblewrap') {
-      const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv } =
-        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv);
+      const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv, mountFds = [] } =
+        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts);
 
       let spawnCmd, spawnArgs;
       if (hasSystemdRun()) {
@@ -478,8 +530,13 @@ class SwiftAddonStub {
       child = spawn(spawnCmd, spawnArgs, {
         cwd: workDir,
         env: bwrapEnv,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe', ...mountFds],
       });
+
+      // Close our copies after spawn — child has inherited them
+      for (const fd of mountFds) {
+        try { fs.closeSync(fd); } catch (_) {}
+      }
     } else {
       // Host backend — refuse to run unsandboxed
       throw new Error(
