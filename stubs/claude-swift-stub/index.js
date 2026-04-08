@@ -285,7 +285,7 @@ function roBindIfExists(bwrapArgs, hostPath, destPath) {
  * explicitly listed. This prevents the agent from reading browser data,
  * password managers, other users' files, or anything outside its workspace.
  */
-function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, sessionId) {
+function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, sessionId, processName) {
   const home = os.homedir();
   const bwrapArgs = [
     '--die-with-parent',
@@ -386,9 +386,15 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, s
   const _bindPairs = []; // { hostPath, vmDest }
 
   if (Array.isArray(additionalMounts)) {
-    // Legacy / test format: array of absolute path strings, dest = host path
+    // Array format (from IPC path: localAgentModeSessions:start → mountPaths).
+    // mountId = basename of host path, matching what the asar puts in VM paths.
+    // Destination must be /sessions/{sessionId}/mnt/{mountId} — same as object format.
     for (const p of additionalMounts) {
-      if (typeof p === 'string' && p) _bindPairs.push({ hostPath: p, vmDest: p });
+      if (typeof p === 'string' && p) {
+        const mountId = path.basename(p);
+        const vmDest = `/sessions/${String(sessionId || '')}/mnt/${mountId}`;
+        _bindPairs.push({ hostPath: p, vmDest });
+      }
     }
   } else if (additionalMounts && typeof additionalMounts === 'object') {
     // Production format from asar: { mountId: { path: 'home/user/dir', mode } }
@@ -535,7 +541,7 @@ class SwiftAddonStub {
 
     if (this._backend === 'bubblewrap') {
       const { command: bwrapCmd, args: bwrapArgs, env: bwrapEnv, mountFds = [] } =
-        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts, sessionId);
+        buildBwrapCommand(claudeBinary, translatedArgs, workDir, filteredEnv, additionalMounts, sessionId, processName);
 
       let spawnCmd, spawnArgs;
       if (hasSystemdRun()) {

@@ -204,13 +204,15 @@ describe('bwrap host-folder mounting integration', () => {
       const bwrapArgs = extractBwrapArgs(capturedArgs);
       const flags = bwrapFlagsBeforeDoubleDash(bwrapArgs);
 
-      // Find the --bind index for our tmpDir (source is /proc/self/fd/N after fd-pin fix)
+      // Dest is /sessions/{sessionId}/mnt/{basename} — not the host path
+      const expectedSuffix = `/mnt/${path.basename(tmpDir)}`;
       const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
+        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) &&
+        flags[i + 2] && flags[i + 2].startsWith('/sessions/') && flags[i + 2].endsWith(expectedSuffix)
       );
       assert.ok(
         bindIdx !== -1,
-        `Expected --bind /proc/self/fd/N ${tmpDir} in bwrap flags before '--', got: ${flags.join(' ')}`
+        `Expected --bind /proc/self/fd/N /sessions/*/mnt/${path.basename(tmpDir)} in bwrap flags before '--', got: ${flags.join(' ')}`
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -230,12 +232,14 @@ describe('bwrap host-folder mounting integration', () => {
       const flags = bwrapFlagsBeforeDoubleDash(bwrapArgs);
 
       for (const dir of [tmpDir1, tmpDir2]) {
+        const expectedSuffix = `/mnt/${path.basename(dir)}`;
         const bindIdx = flags.findIndex((a, i) =>
-          a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === dir
+          a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) &&
+          flags[i + 2] && flags[i + 2].startsWith('/sessions/') && flags[i + 2].endsWith(expectedSuffix)
         );
         assert.ok(
           bindIdx !== -1,
-          `Expected --bind /proc/self/fd/N ${dir} in bwrap flags, got: ${flags.join(' ')}`
+          `Expected --bind /proc/self/fd/N /sessions/*/mnt/${path.basename(dir)} in bwrap flags, got: ${flags.join(' ')}`
         );
       }
     } finally {
@@ -328,12 +332,14 @@ describe('IPC boundary: userSelectedFolders translation', () => {
 
       assert.ok(capturedArgs !== null, 'spawn should have been called');
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
+      const expectedSuffix = `/mnt/${path.basename(tmpDir)}`;
       const bindIdx = flags.findIndex((a, i) =>
-        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === tmpDir
+        a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) &&
+        flags[i + 2] && flags[i + 2].startsWith('/sessions/') && flags[i + 2].endsWith(expectedSuffix)
       );
       assert.ok(
         bindIdx !== -1,
-        `Expected --bind /proc/self/fd/N ${tmpDir} in bwrap flags before '--', got: ${flags.join(' ')}`
+        `Expected --bind /proc/self/fd/N /sessions/*/mnt/${path.basename(tmpDir)} in bwrap flags before '--', got: ${flags.join(' ')}`
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
