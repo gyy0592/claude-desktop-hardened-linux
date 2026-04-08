@@ -383,34 +383,40 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, s
   // Legacy array format (absolute strings) is also supported for test compatibility,
   // binding to the host path as destination.
 
-  const _bindPairs = []; // { hostPath, destPath }
+  const _bindPairs = []; // { hostPath, vmDest }
 
   if (Array.isArray(additionalMounts)) {
     // Legacy / test format: array of absolute path strings, dest = host path
     for (const p of additionalMounts) {
-      if (typeof p === 'string' && p) _bindPairs.push({ hostPath: p, destPath: p });
+      if (typeof p === 'string' && p) _bindPairs.push({ hostPath: p, vmDest: p });
     }
   } else if (additionalMounts && typeof additionalMounts === 'object') {
     // Production format from asar: { mountId: { path: 'home/user/dir', mode } }
     // path is path.relative('/', absolutePath), i.e. without leading slash.
-    // Destination: SESSION_BASE/sessions/{sessionId}/mnt/{mountId}
+    // Inside bwrap the asar tells Claude Code to look at /sessions/{sessionId}/mnt/{mountId}.
+    // We create that path structure with --dir and bind there.
     for (const [mountId, spec] of Object.entries(additionalMounts)) {
       if (!spec || typeof spec.path !== 'string') continue;
       const hostPath = '/' + spec.path;
-      const destPath = path.join(SESSION_BASE, 'sessions', String(sessionId || ''), 'mnt', mountId);
-      _bindPairs.push({ hostPath, destPath });
+      const vmDest = `/sessions/${String(sessionId || '')}/mnt/${mountId}`;
+      _bindPairs.push({ hostPath, vmDest });
     }
   }
 
-  for (const { hostPath: p, destPath } of _bindPairs) {
+  // Create /sessions/{sessionId}/mnt directory structure inside bwrap if needed
+  if (_bindPairs.some(b => b.vmDest.startsWith('/sessions/'))) {
+    bwrapArgs.push('--dir', '/sessions');
+    bwrapArgs.push('--dir', `/sessions/${String(sessionId || '')}`);
+    bwrapArgs.push('--dir', `/sessions/${String(sessionId || '')}/mnt`);
+  }
+
+  for (const { hostPath: p, vmDest } of _bindPairs) {
     if (typeof p !== 'string' || !p) continue;
     if (!isPathSafe(p)) continue;
     try {
       const stat = fs.lstatSync(p);
       if (!stat.isDirectory()) continue;
       if (stat.uid !== process.getuid()) continue;
-      // Ensure destination directory exists inside SESSION_BASE (already bound writable)
-      try { fs.mkdirSync(destPath, { recursive: true }); } catch (_) {}
       // Open with O_NOFOLLOW: if p was swapped to a symlink after lstatSync,
       // openSync throws ELOOP — caught below, path is skipped safely
       const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -434,7 +440,7 @@ function buildBwrapCommand(claudeBinary, args, workDir, env, additionalMounts, s
       }
       const childFd = 3 + mountFds.length;
       mountFds.push(fd);
-      bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, destPath);
+      bwrapArgs.push('--bind', `/proc/self/fd/${childFd}`, vmDest);
     } catch (_) {
       // path inaccessible, gone, or open failed — skip
     }

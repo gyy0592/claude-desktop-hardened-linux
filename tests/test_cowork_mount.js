@@ -394,11 +394,7 @@ describe('Object-format additionalMounts (asar production format)', () => {
 
       assert.ok(capturedArgs !== null, 'spawn should have been called');
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-      const home = os.homedir();
-      const sessionBase = process.env.XDG_CONFIG_HOME
-        ? path.join(process.env.XDG_CONFIG_HOME, 'Claude', 'local-agent-mode-sessions')
-        : path.join(home, '.config', 'Claude', 'local-agent-mode-sessions');
-      const expectedDest = path.join(sessionBase, 'sessions', sessionId, 'mnt', mountId);
+      const expectedDest = `/sessions/${sessionId}/mnt/${mountId}`;
       const bindIdx = flags.findIndex((a, i) =>
         a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === expectedDest
       );
@@ -420,12 +416,8 @@ describe('Object-format additionalMounts (asar production format)', () => {
       await stub.spawn(sessionId, 'claude', '/usr/bin/true', [], '/tmp', {}, additionalMounts);
 
       const flags = bwrapFlagsBeforeDoubleDash(extractBwrapArgs(capturedArgs));
-      const home = os.homedir();
-      const sessionBase = process.env.XDG_CONFIG_HOME
-        ? path.join(process.env.XDG_CONFIG_HOME, 'Claude', 'local-agent-mode-sessions')
-        : path.join(home, '.config', 'Claude', 'local-agent-mode-sessions');
-      for (const [mountId] of [['mount-a'], ['mount-b']]) {
-        const expectedDest = path.join(sessionBase, 'sessions', sessionId, 'mnt', mountId);
+      for (const mountId of ['mount-a', 'mount-b']) {
+        const expectedDest = `/sessions/${sessionId}/mnt/${mountId}`;
         assert.ok(
           flags.findIndex((a, i) => a === '--bind' && /^\/proc\/self\/fd\/\d+$/.test(flags[i + 1]) && flags[i + 2] === expectedDest) !== -1,
           `Missing --bind /proc/self/fd/N ${expectedDest}`
